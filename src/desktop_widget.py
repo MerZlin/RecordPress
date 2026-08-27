@@ -28,9 +28,14 @@ ITEM_NAMES: dict[str, str] = {
     "disk":    "C盘剩余",
 }
 
-# Windows extended style constants for click-through
+# Windows extended style constants for click-through / native Z-order.
 _GWL_EXSTYLE = -20
 _WS_EX_TRANSPARENT = 0x00000020
+_HWND_TOPMOST = -1
+_HWND_NOTOPMOST = -2
+_SWP_NOSIZE = 0x0001
+_SWP_NOMOVE = 0x0002
+_SWP_NOACTIVATE = 0x0010
 
 
 class DesktopWidget(QWidget):
@@ -408,22 +413,40 @@ class DesktopWidget(QWidget):
             style &= ~_WS_EX_TRANSPARENT
         ctypes.windll.user32.SetWindowLongPtrW(hwnd, _GWL_EXSTYLE, style)
 
+    def _sync_native_topmost(self, on_top: bool) -> None:
+        """Synchronize the HWND Z-order without moving or activating it."""
+        if not hasattr(ctypes, "windll"):
+            return
+        hwnd = int(self.winId())
+        insert_after = _HWND_TOPMOST if on_top else _HWND_NOTOPMOST
+        ctypes.windll.user32.SetWindowPos(
+            ctypes.c_void_p(hwnd),
+            ctypes.c_void_p(insert_after),
+            0,
+            0,
+            0,
+            0,
+            _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE,
+        )
+
     def set_always_on_top(self, on_top: bool) -> None:
-        """Toggle whether the window stays above all other windows."""
-        # Only act when the flag actually needs to change — setWindowFlags
-        # recreates the native window handle which resets WS_EX_TRANSPARENT.
+        """Toggle and reassert whether the window stays above other windows."""
+        # setWindowFlags recreates the native handle, so only change Qt flags
+        # when necessary. Native Z-order is synchronized on every call because
+        # Windows can lose TOPMOST state while the Qt flag remains unchanged.
         current = int(self.windowFlags())
         has_flag = bool(current & Qt.WindowType.WindowStaysOnTopHint)
-        if has_flag == on_top:
-            return
-        flags = self.windowFlags()
-        if on_top:
-            flags |= Qt.WindowType.WindowStaysOnTopHint
-        else:
-            flags &= ~Qt.WindowType.WindowStaysOnTopHint
-        self.setWindowFlags(flags)
-        if self.isVisible():
-            self.show()
+        if has_flag != on_top:
+            was_visible = self.isVisible()
+            flags = self.windowFlags()
+            if on_top:
+                flags |= Qt.WindowType.WindowStaysOnTopHint
+            else:
+                flags &= ~Qt.WindowType.WindowStaysOnTopHint
+            self.setWindowFlags(flags)
+            if was_visible:
+                self.show()
+        self._sync_native_topmost(on_top)
 
     # ------------------------------------------------------------------
     # Window positioning
@@ -453,6 +476,8 @@ class DesktopWidget(QWidget):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        on_top = bool(self._config.get("general.always_on_top", True))
+        self._sync_native_topmost(on_top)
         self.shown_from_tray.emit()
 
     def closeEvent(self, event) -> None:
