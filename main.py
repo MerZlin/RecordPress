@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime, timedelta
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QIcon
@@ -69,6 +70,7 @@ class DesktopPetApp:
 
         # Input hooks → desktop widget
         self.input_hooks.count_updated.connect(self._on_counts_updated)
+        self.input_hooks.rollover_detected.connect(self._handle_rollover)
         # Push initial loaded counts to the widget
         self.desktop_widget.update_counts(
             self.input_hooks.keyboard_count,
@@ -108,6 +110,9 @@ class DesktopPetApp:
         self._flush_timer.timeout.connect(self._do_flush)
         self._flush_timer.start(max(flush_ms, 5000))
 
+        # Schedule a one-shot timer at the next midnight (day rollover)
+        self._schedule_midnight()
+
         # Final flush on quit
         self._app.aboutToQuit.connect(self._on_about_to_quit)
 
@@ -138,9 +143,37 @@ class DesktopPetApp:
         self.desktop_widget.update_counts(kb, ms)
 
     def _do_flush(self) -> None:
-        kb = self.input_hooks.keyboard_count
-        ms = self.input_hooks.mouse_count
-        self.data_manager.save_today(kb, ms)
+        self._handle_rollover()
+        snapshot = self.input_hooks.current_snapshot()
+        self.data_manager.save_day(
+            snapshot["date"], snapshot["keyboard"], snapshot["mouse"]
+        )
+
+    # ------------------------------------------------------------------
+    # Midnight day rollover
+    # ------------------------------------------------------------------
+
+    def _handle_rollover(self) -> None:
+        """Switch dates if needed and persist every sealed day snapshot."""
+        self.input_hooks.rollover_if_needed()
+        for snapshot in self.input_hooks.drain_rollovers():
+            self.data_manager.save_day(
+                snapshot["date"], snapshot["keyboard"], snapshot["mouse"]
+            )
+
+    def _schedule_midnight(self) -> None:
+        """Re-arm a one-shot timer to fire at the next 00:00 local time."""
+        now = datetime.now()
+        next_midnight = (now + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        delay_ms = int((next_midnight - now).total_seconds() * 1000)
+        QTimer.singleShot(delay_ms, self._on_midnight)
+
+    def _on_midnight(self) -> None:
+        """Midnight tick: seal yesterday's counts, reset, refresh UI, re-arm."""
+        self._handle_rollover()
+        self._schedule_midnight()
 
     def _on_exit(self) -> None:
         # aboutToQuit → _on_about_to_quit performs the final flush + cleanup.

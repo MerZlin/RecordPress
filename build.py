@@ -65,7 +65,7 @@ def build() -> None:
         os.remove(spec_file)
 
     exe = os.path.join(root, "dist", "DesktopPet.exe")
-    print(f"Build complete → {exe}")
+    print("Build complete -> dist/DesktopPet.exe")
 
 
 if __name__ == "__main__":

@@ -54,14 +54,17 @@ class DataManager:
 
     def save_today(self, keyboard_count: int, mouse_count: int) -> None:
         """Persist today's running counts to disk (atomic)."""
-        today = date.today().isoformat()
+        self.save_day(date.today().isoformat(), keyboard_count, mouse_count)
+
+    def save_day(self, iso_date: str, keyboard_count: int, mouse_count: int) -> None:
+        """Persist counts for an arbitrary date to disk (atomic)."""
         payload: dict[str, Any] = {
-            "date": today,
+            "date": iso_date,
             "keyboard_count": keyboard_count,
             "mouse_count": mouse_count,
         }
         with self._write_lock:
-            self._atomic_write(self._path_for(today), payload)
+            self._atomic_write(self._path_for(iso_date), payload)
 
     def load_day(self, iso_date: str) -> dict[str, int]:
         """Return counts for an arbitrary date (or zeros)."""
